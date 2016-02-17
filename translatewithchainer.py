@@ -12,8 +12,8 @@ import jcconv
 #from impala.dbapi import connect
 
 #f = open("train1000.en")]
-#f = open("train20000.en")
-f = open("train5000.en")
+f = open("train20000.en")
+#f = open("train5000.en")
 englishdata = f.read()
 f.close()
 englishsentencset = englishdata.split("\n")
@@ -23,8 +23,8 @@ for i in range(len(englishsentencset)):
 	englishsentencsetdoc[i] = englishsentencset[i]
 
 #f = open("train1000.ja")
-#f = open("train20000.ja")
-f = open("train5000.ja")
+f = open("train20000.ja")
+#f = open("train5000.ja")
 japandata = f.read()
 f.close()
 japansentencset = japandata.split("\n")
@@ -36,7 +36,7 @@ for i in range(len(japansentencset)):
 	japansentencset[i] = tagger.parse(japansentencset[i]).split(" ")[0:-1]
 	japansentencsetdoc[i] = japansentencset[i]
 
-N = 5000
+N = 20000
 f = open("test10.en")
 englishdatatest = f.read()
 f.close()
@@ -67,11 +67,12 @@ def vec2dense(vec, num_terms):
 	return list(gensim.matutils.corpus2dense([vec], num_terms=num_terms).T[0])
 
 def createtvectorMat(bow_docs,dct):
-	vectorMat2 = np.array([])
+	vectorMatlist = []
 	for name in bow_docs.keys():
 		if (np.array(vectorMat2)).shape[0] == 0:
 			sparse = bow_docs[name]
 			vectorMat2 = vec2dense(sparse, num_terms=len(dct))
+			vectorMatlist.append(vectorMat2)
 		else:
 			sparse = bow_docs[name]
 			vectorMat2 = np.c_[vectorMat2,vec2dense(sparse, num_terms=len(dct))]
@@ -264,8 +265,28 @@ def train(japansentencsetdoc,englishsentencsetdoc,model):
 		opt.clip_grads(10) # 大きすぎる勾配を抑制
 		opt.update() # パラメータの更新
 
+def Test(n):
+	text = ""
+	hyp_sentence = forward(japantest[n],englishtest[n],model, training = False)
+	for w in japantest[n]:
+			text = text + w
+	print "=====問題======"
+	print text
+	print "=====正解======"
+	print englishtest[n]
+	print "=====予測======"
+	print hyp_sentence
 
-for i in range(0,10):
+def test(sentence):
+	tagger = MeCab.Tagger( '-Owakati -u /usr/local/Cellar/mecab/0.996/lib/mecab/dic/ipadic/wikipedia-keyword.dic')
+	wordarrays = tagger.parse(sentence).split(" ")[0:-1]
+	#wordarrays = sentence
+	print wordarrays
+	print (wordarrays == japantest[0])
+	hyp_sentence = forward(wordarrays,['did', 'you', 'clean', 'your', 'room', '?'],model,training = False)
+	print hyp_sentence
+
+for i in range(0,2):
 	print i
 	train(japansentencsetdoc,englishsentencsetdoc,model)
 	hyp_sentence = forward(japantest[0],englishtest[0],model, training = False)
@@ -280,16 +301,9 @@ for i in range(0,10):
 	print hyp_sentence
 
 
-def test(sentence):
-	tagger = MeCab.Tagger( '-Owakati -u /usr/local/Cellar/mecab/0.996/lib/mecab/dic/ipadic/wikipedia-keyword.dic')
-	wordarrays = tagger.parse(sentence).split(" ")[0:-1]
-	#wordarrays = sentence
-	print wordarrays
-	print (wordarrays == japantest[0])
-	hyp_sentence = forward(wordarrays,['did', 'you', 'clean', 'your', 'room', '?'],model,training = False)
-	print hyp_sentence
-
-
-
-forward(japansentencsetdoc[0],englishsentencsetdoc[0],model, training = False)
-
+# Save final model
+import pickle
+pickle.dump(model, open("model20000_2.dump", 'wb'), -1)
+pickle.dump(japaneseIDdic,open("japaneseIDdic.dump", 'wb'), -1)
+pickle.dump(englishIDdic,open("englishIDdic.dump", 'wb'), -1)
+pickle.dump(unfiltered2,open("unfiltered2.dump", 'wb'), -1)
