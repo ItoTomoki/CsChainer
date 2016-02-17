@@ -20,6 +20,10 @@ model = pickle.load(open("modelsample/model20000_1.dump", 'r'))
 japaneseIDdic = pickle.load(open("modelsample/japaneseIDdic.dump", 'r'))
 englishIDdic = pickle.load(open("modelsample/englishIDdic.dump", 'r'))
 unfiltered2 = pickle.load(open("modelsample/unfiltered2.dump", 'r'))
+model = pickle.load(open("model20000_2.dump", 'r'))
+japaneseIDdic = pickle.load(open("japaneseIDdic.dump", 'r'))
+englishIDdic = pickle.load(open("englishIDdic.dump", 'r'))
+unfiltered2 = pickle.load(open("unfiltered2.dump", 'r'))
 SRC_VOCAB_SIZE = model.w_xi.W.shape[0]
 TRG_VOCAB_SIZE = model.w_yq.W.shape[0]
 HIDDEN_SIZE = 100
@@ -105,6 +109,7 @@ japantest = japandatatest.split("\n")
 tagger = MeCab.Tagger( '-Owakati -u /usr/local/Cellar/mecab/0.996/lib/mecab/dic/ipadic/wikipedia-keyword.dic')
 japantestdoc = {}
 for i in range(len(japantest)):
+	japantest[i] = japantest[i].split(" ")[0:-1]
 	#japantest[i] = japantest[i].replace(" ","")
 	japantest[i] = tagger.parse(japantest[i]).split(" ")[0:-1]
 

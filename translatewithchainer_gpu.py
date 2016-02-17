@@ -1,15 +1,32 @@
+#encoding:utf-8
 #データ読み込み
 import json
 import os
 from ast import literal_eval
 import re
-import MeCab
+#import MeCab
 import unicodedata
 import sys
-import ngram
-import jcconv
+#import ngram
+#import jcconv
+import chainer
+from chainer import cuda
+import argparse
+import numpy as np
 #from normalizer import normalize,_convert_marks,_delete_cyclic_word
 #from impala.dbapi import connect
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--gpu', '-g', default=-1, type=int,
+                    help='GPU ID (negative value indicates CPU)')
+args = parser.parse_args()
+
+#xp = cuda.cupy if args.gpu >= 0 else np
+if args.gpu >= 0:
+	xp = cuda.cupy
+else:
+	xp = np
+
 
 #f = open("train1000.en")]
 f = open("train20000.en")
@@ -29,14 +46,14 @@ japandata = f.read()
 f.close()
 japansentencset = japandata.split("\n")
 
-tagger = MeCab.Tagger( '-Owakati -u /usr/local/Cellar/mecab/0.996/lib/mecab/dic/ipadic/wikipedia-keyword.dic')
+#tagger = MeCab.Tagger( '-Owakati -u /usr/local/Cellar/mecab/0.996/lib/mecab/dic/ipadic/wikipedia-keyword.dic')
 japansentencsetdoc = {}
 for i in range(len(japansentencset)):
-	#japansentencset[i] = japansentencset[i].split(" ")
-	#japansentencsetdoc[i] = japansentencset[i]
-	japansentencset[i] = japansentencset[i].replace(" ","")
-	japansentencset[i] = tagger.parse(japansentencset[i]).split(" ")[0:-1]
+	japansentencset[i] = japansentencset[i].split(" ")
 	japansentencsetdoc[i] = japansentencset[i]
+	#japansentencset[i] = japansentencset[i].replace(" ","")
+	#japansentencset[i] = tagger.parse(japansentencset[i]).split(" ")[0:-1]
+	#japansentencsetdoc[i] = japansentencset[i]
 
 N = 20000
 f = open("test10.en")
@@ -52,13 +69,13 @@ f = open("test10.ja")
 japandatatest = f.read()
 f.close()
 japantest = japandatatest.split("\n")
-tagger = MeCab.Tagger( '-Owakati -u /usr/local/Cellar/mecab/0.996/lib/mecab/dic/ipadic/wikipedia-keyword.dic')
+#tagger = MeCab.Tagger( '-Owakati -u /usr/local/Cellar/mecab/0.996/lib/mecab/dic/ipadic/wikipedia-keyword.dic')
 japantestdoc = {}
 for i in range(len(japantest)):
-	#japantest[i] = japantest[i].split(" ")
-	#japantestdoc[i] = japantest[i]
-	japantest[i] = japantest[i].replace(" ","")
-	japantest[i] = tagger.parse(japantest[i]).split(" ")[0:-1]
+	japantest[i] = japantest[i].split(" ")
+	japantestdoc[i] = japantest[i]
+	#japantest[i] = japantest[i].replace(" ","")
+	#japantest[i] = tagger.parse(japantest[i]).split(" ")[0:-1]
 	japansentencsetdoc[i + N] = japantest[i]
 
 
@@ -72,6 +89,7 @@ def vec2dense(vec, num_terms):
 
 def createtvectorMat(bow_docs,dct):
 	vectorMatlist = []
+	vectorMat2 = []
 	for name in bow_docs.keys():
 		if (np.array(vectorMat2)).shape[0] == 0:
 			sparse = bow_docs[name]
@@ -127,7 +145,7 @@ model = FunctionSet(
 )  
 """
 
-import numpy as np
+
 from chainer import Variable
 from chainer.functions import *
 
@@ -187,7 +205,12 @@ model = FunctionSet(
 	w_jy = Linear(TRG_EMBED_SIZE, TRG_VOCAB_SIZE), # 出力隠れ層 -> 出力隠れ層
 )  
 
+if args.gpu >= 0:
+    cuda.check_cuda_available()
+    cuda.get_device(args.gpu).use()
+    model.to_gpu()
 
+print "model_making"
 END_OF_SENTENCE = len(unfiltered2)
 
 # src_sentence: 翻訳したい単語列 e.g. ['彼', 'は', '走る']
@@ -217,13 +240,13 @@ def forward(src_sentence, trg_sentence, model, training):
 	trg_sentence = trg_sentence2
 	#print trg_sentence
 	# LSTM内部状態の初期値
-	c = Variable(np.zeros((1, HIDDEN_SIZE),dtype=np.float32))
+	c = Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
 	# エンコーダ
-	x = Variable(np.array([END_OF_SENTENCE], dtype=np.int32))
+	x = Variable(xp.array([END_OF_SENTENCE], dtype=np.int32))
 	i = tanh(model.w_xi(x))
 	c, p = lstm(c, model.w_ip(i))
 	for word in reversed(src_sentence):
-		x = Variable(np.array([word], dtype=np.int32))
+		x = Variable(xp.array([word], dtype=np.int32))
 		i = tanh(model.w_xi(x))
 		c, p = lstm(c, model.w_ip(i) + model.w_pp(p))
 	# エンコーダ -> デコーダ
@@ -231,11 +254,12 @@ def forward(src_sentence, trg_sentence, model, training):
 	# デコーダ
 	if training:
 		# 学習時はyとして正解の翻訳を使い、forwardの結果として累積損失を返す。
-		accum_loss = np.zeros((), dtype=np.float32)
+		accum_loss = xp.zeros((), dtype=np.float32)
 		for word in trg_sentence:
 			j = tanh(model.w_qj(q))
 			y = model.w_jy(j)
-			t = Variable(np.array([word], dtype=np.int32))
+			t = Variable(xp.array([word], dtype=np.int32))
+			loss = softmax_cross_entropy(y, t)
 			accum_loss += softmax_cross_entropy(y, t)
 			c, q = lstm(c, model.w_yq(t) + model.w_qq(q))
 		return accum_loss
@@ -252,7 +276,7 @@ def forward(src_sentence, trg_sentence, model, training):
 				break # 終端記号が生成されたので終了
 			hyp_sentence.append(unfiltered2[word])
 			#print word
-			s_y = Variable(np.array([word], dtype=np.int32))
+			s_y = Variable(xp.array([word], dtype=np.int32))
 			c, q = lstm(c, model.w_yq(s_y) + model.w_qq(q))
 		return hyp_sentence
 
@@ -307,7 +331,8 @@ for i in range(0,2):
 
 # Save final model
 import pickle
-pickle.dump(model, open("model20000_2.dump", 'wb'), -1)
+#pickle.dump(model, open("model20000_2.dump", 'wb'), -1)
+pickle.dump(model.to_cpu(), open("model20000_2.dump", 'wb'), -1)
 pickle.dump(japaneseIDdic,open("japaneseIDdic.dump", 'wb'), -1)
 pickle.dump(englishIDdic,open("englishIDdic.dump", 'wb'), -1)
 pickle.dump(unfiltered2,open("unfiltered2.dump", 'wb'), -1)
