@@ -49,7 +49,7 @@ def load_data(filename):
 enata = load_data('train20000.en')
 train_data  = enata[0:5000]
 valid_data = enata[5000:6000]
-valid_data = enata[6000:7000]
+test_data = enata[6000:7000]
 print('#vocab =', len(vocab))
 
 # Prepare RNNLM model
@@ -59,6 +59,9 @@ model = chainer.FunctionSet(embed=F.EmbedID(len(vocab), n_units),
                             l2_x=F.Linear(n_units, 4 * n_units),
                             l2_h=F.Linear(n_units, 4 * n_units),
                             l3=F.Linear(n_units, len(vocab)))
+
+
+
 
 for param in model.parameters:
     param[:] = np.random.uniform(-0.1, 0.1, param.shape)
@@ -155,10 +158,10 @@ for i in six.moves.range(n_epoch):
         optimizer.update()
     if (i) % 1 == 0:
         now = time.time()
-        throuput = i / (now - cur_at)
+        epoch_time = (now - start_at)
         perp = evaluate(train_data)
         print('iter {} training perplexity: {:.2f} ({:.2f} iters/sec)'.format(
-            i + 1, perp, throuput))
+            i + 1, perp, epoch_time))
         cur_at = now
         cur_log_perp.fill(0)
     if (i) % 1 == 0:
@@ -171,8 +174,25 @@ for i in six.moves.range(n_epoch):
         #if epoch >= 6:
             #optimizer.lr /= 1.2
             #print('learning rate =', optimizer.lr)
+    #モデル書き込み
+    with open('model.pkl', 'wb') as o:
+    pickle.dump(model, o)
     sys.stdout.flush()
 
+if args.model == '':
+    model = chainer.FunctionSet(l1=F.Linear(784, n_units),
+                                                   l2=F.Linear(n_units, n_units),
+                                                   l3=F.Linear(n_units, 10))
+else:
+    with open(args.model, 'rb') as i:
+        model = pickle.load(i)
+
+model.to_cpu()
+with open('model.pkl', 'wb') as o:
+    pickle.dump(model, o)
+
+with open('model.pkl', 'rb') as i:
+        model = pickle.load(i)
 # Evaluate on test dataset
 print('test')
 test_perp = evaluate(test_data)
