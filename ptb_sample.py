@@ -49,6 +49,7 @@ def load_data(filename):
 enata = load_data('train20000.en')
 train_data  = enata[0:5000]
 valid_data = enata[5000:6000]
+valid_data = enata[6000:7000]
 print('#vocab =', len(vocab))
 
 # Prepare RNNLM model
@@ -130,7 +131,8 @@ print('going to train {} iterations'.format(jump * n_epoch))
 for i in six.moves.range(n_epoch):
     perm = random.permutation(len(train_data))
     for j in xrange(jump):
-        train_data_batch = xp.array(train_data[perm][j:(j+batchsize)])
+        alllength = 0
+        train_data_batch = np.array(train_data[perm][j:(j+batchsize)])
         for words in train_data_batch:
             for cur_word,next_word  in zip(words, words[1:]):
                 cur_word = xp.array(cur_word).reshape(1,)
@@ -138,8 +140,9 @@ for i in six.moves.range(n_epoch):
                 state, loss_i = forward_one_step(cur_word, next_word, state)
                 accum_loss += loss_i
                 cur_log_perp += loss_i.data.reshape(())
+            alllength += (len(words) - 1)
         batch_size_array = np.array(batchsize, dtype=np.float32)
-        if gpu:
+        if args.gpu >= 0:
             batch_size_array = cuda.to_gpu(batch_size_array)
         accum_loss = accum_loss / chainer.Variable(batch_size_array)
         #epoch_loss += accum_loss.data * batchsize
@@ -153,7 +156,7 @@ for i in six.moves.range(n_epoch):
     if (i) % 1 == 0:
         now = time.time()
         throuput = i / (now - cur_at)
-        perp = math.exp(cuda.to_cpu(cur_log_perp) / i*len(train_data))
+        perp = evaluate(train_data)
         print('iter {} training perplexity: {:.2f} ({:.2f} iters/sec)'.format(
             i + 1, perp, throuput))
         cur_at = now
@@ -165,9 +168,9 @@ for i in six.moves.range(n_epoch):
         perp = evaluate(valid_data)
         print('epoch {} validation perplexity: {:.2f}'.format(epoch, perp))
         #cur_at += time.time() - now  # skip time of evaluation
-        if epoch >= 6:
-            optimizer.lr /= 1.2
-            print('learning rate =', optimizer.lr)
+        #if epoch >= 6:
+            #optimizer.lr /= 1.2
+            #print('learning rate =', optimizer.lr)
     sys.stdout.flush()
 
 # Evaluate on test dataset
