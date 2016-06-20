@@ -1,4 +1,5 @@
 #encoding:utf-8
+#https://arxiv.org/abs/1506.01057
 #データ読み込み
 import json
 import os
@@ -250,6 +251,18 @@ def forward(src_sentences, trg_sentences, model, training):
 				hyp_sentences.append(hyp_sentence)
 				break # 終端記号が生成されたので終了
 			if (word == END_OF_SENTENCE) | (len(hyp_sentence) >= 20): # 20単語以上は生成しないようにする
+				list_e = []
+				sum_e = chainer.Variable(xp.zeros((1,1), dtype=np.float32))
+				for P in P_list:
+					v_i = model.w_we(tanh(model.w_Qw(Q) + model.w_Pw(P))) #v_i: scalar
+					exp_v_i = exp(v_i)
+					list_e.append(exp_v_i)
+					sum_e += exp_v_i
+				# make attention vector
+				m_t = Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
+				for n in range(len(P_list)):
+					a_i = list_e[n] / sum_e
+					m_t += matmul(a_i ,P_list[n])
 				hyp_sentences.append(hyp_sentence)
 				#C, Q = lstm(C, model.w_qQ(q) + model.w_QQ(Q))
 				C, Q = lstm(C, model.w_qQ(q) + model.w_QQ(Q) + model.w_cp(m_t))

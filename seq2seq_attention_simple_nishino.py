@@ -1,4 +1,5 @@
 #Generating News Headlines with Reccurent Neural Networks
+#https://arxiv.org/abs/1512.01712
 #データ読み込み
 import json
 import os
