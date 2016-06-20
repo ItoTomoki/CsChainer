@@ -18,5 +18,7 @@ Hieralchicals2s_attention_gpu_nishinokana_2.py
 #seq2seq attention シンプルバージョン
 
 Generating News Headlines with Reccurent Neural Networks
+
 https://arxiv.org/abs/1512.01712
+
 seq2seq_attention_simple_nishino.py
