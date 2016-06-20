@@ -13,6 +13,7 @@ import chainer
 from chainer import cuda
 import argparse
 import numpy as np
+import MeCab
 #from normalizer import normalize,_convert_marks,_delete_cyclic_word
 #from impala.dbapi import connect
 
@@ -28,107 +29,56 @@ if args.gpu >= 0:
 else:
 	xp = np
 
+"""
+tagger = MeCab.Tagger( '-Owakati -u /usr/local/Cellar/mecab/0.996/lib/mecab/dic/ipadic/wikipedia-keyword.dic')
 
-#f = open("train1000.en")]
-#f = open("train20000.en")
-f = open("yahoofinance/alltext0525.txt")
-#f = open("train5000.en")
-#englishdata = f.read()
-yahooboarddata = f.read()
-f.close()
-#englishsentencset = englishdata.split("\n")
-yahooboarddataset = yahooboarddata.split("\n")
-yahooboarddataset = np.array(yahooboarddataset)
-smallyahooboarddataset = yahooboarddataset[range(0,len(yahooboarddataset),2)]
-
+files = os.listdir('lyric/')
 vocablist = []
-for sentences in smallyahooboarddataset:
-	sentence = sentences.split(" ")
-	vocablist += sentence
-
-
+sentenceslist_file = []
+for file_name in files:
+	f = open('lyric/' + file_name)
+	data = f.read()
+	f.close()
+	sentences = data.split("\r")
+	sentences = data.split("\r")
+	sentenceslist = {}
+	k = 0
+	for sentence in sentences:
+		#print sentence
+		wordarrays = tagger.parse(sentence).split(" ")[0:-1]
+		vocablist += wordarrays
+		if sentence != '':
+			if k > 1:
+				sentenceslist[k-2].append(wordarrays)
+		else:
+			if k > 0:
+				sentenceslist[k-1] = []
+			k += 1
+	try:
+		sentenceslist_file.append(sentenceslist)
+	except:
+		sentenceslist_file = sentenceslist
+"""
+import pickle 
+#pickle.dump(sentenceslist_file, open("lyric/sentenceslist_file.dump", 'wb'), -1)
+sentenceslist_file = pickle.load(open("lyric/sentenceslist_file.dump"))
+vocablist = []
+for sentences in sentenceslist_file:
+	for sentence_id in sentences:
+		for sentence in sentences[sentence_id]:
+			for word in sentence:
+				vocablist.append(word)
 
 vocablist = list(set(vocablist))
 vocabIDdic = dict(zip(vocablist,range(len(vocablist))))
-
-
-smallyahooboardsentences = []
-for comments in smallyahooboarddataset:
-	smallyahooboardsentence = []
-	sentences = comments.split("。")
-	for kuarray in sentences:
-		IDsentence = []
-		ku = kuarray.split("、")
-		for wordsarray in ku:
-			words = wordsarray.split(" ")
-			for word in words:
-				try:
-					IDsentence.append(vocabIDdic[word])
-				except:
-					vocablist.append(word)
-					vocabIDdic[word] = len(vocablist)
-					IDsentence.append(vocabIDdic[word])
-		smallyahooboardsentence.append(IDsentence)
-	smallyahooboardsentences.append(smallyahooboardsentence)
-
 vocabworddic = dict(zip(vocabIDdic.values(),vocabIDdic.keys()))
 
 #http://qiita.com/odashi_t/items/a1be7c4964fbea6a116e
 from chainer import FunctionSet
 from chainer.functions import *
-"""
-VOCAB_SIZE = len(unfiltered)
-HIDDEN_SIZE = 100
-model = FunctionSet(
-  w_xh = EmbedID(VOCAB_SIZE, HIDDEN_SIZE), # 入力層(one-hot) -> 隠れ層
-  w_hh = Linear(HIDDEN_SIZE, HIDDEN_SIZE), # 隠れ層 -> 隠れ層
-  w_hy = Linear(HIDDEN_SIZE, VOCAB_SIZE), # 隠れ層 -> 出力層
-)  
-"""
-
 
 from chainer import Variable
-
-
-"""
-def forward(sentence, model,exity = False):
-	accum_loss = Variable(np.zeros((), dtype=np.float32)) # 累積損失の初期値
-	sentence = [ japaneseIDdic[word.decode("utf-8")] for word in sentence]
-	h = Variable(np.zeros((1, HIDDEN_SIZE), dtype=np.float32)) # 隠れ層の初期値
-	log_joint_prob = float(0) # 文の結合確率
-	for word in sentence:
-		x = Variable(np.array([word], dtype=np.int32)) # 次回の入力層 (=今回の正解)
-		u = model.w_hy(h)
-		accum_loss += softmax_cross_entropy(u, x) # 損失の蓄積
-		y = softmax(u)
-		log_joint_prob += np.log(y.data[0][word]) # 結合確率の更新
-		h = tanh(model.w_xh(x) + model.w_hh(h)) # 隠れ層の更新
-	return log_joint_prob, accum_loss # 累積損失も一緒に返す
-"""
 from chainer.optimizers import *
-"""
-def train(japansentencsetdoc,model):
-	opt = SGD() # 確率的勾配法を使用
-	opt.setup(model) # 学習器の初期化
-	#for sentence in sentence_set:
-	for textID in range(900):
-		sentence = japansentencsetdoc[textID]
-		opt.zero_grads(); # 勾配の初期化
-		log_joint_prob, accum_loss = forward(sentence, model) # 損失の計算
-		accum_loss.backward() # 誤差逆伝播
-		opt.clip_grads(10) # 大きすぎる勾配を抑制
-		opt.update() # パラメータの更新
-
-def test(japansentencsetdoc,model):
-	for textID in range(900,1000):
-		log_joint_prob, accum_loss = forward(japansentencsetdoc[textID], model) # 損失の計算
-	return 	log_joint_prob,accum_loss.data
-
-for i in range(0,100):
-	train(japansentencsetdoc,model)
-	log_joint_prob,accum_loss = test(japansentencsetdoc,model)
-	print log_joint_prob,accum_loss
-"""
 
 SRC_VOCAB_SIZE = (len(vocablist) + 3)
 SRC_EMBED_SIZE  = 200
@@ -145,7 +95,7 @@ model = FunctionSet(
 	w_PQ = Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE), # 文入力隠れ層 -> 文出力隠れ層
 	w_QQ = Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE), # 文出力隠れ層 -> 文出力隠れ層
 	w_Qq = Linear(HIDDEN_SIZE, HIDDEN_SIZE), # 文出力隠れ層 -> 出力埋め込み層
-	w_qQ = Linear(HIDDEN_SIZE, HIDDEN_SIZE), # 出力埋め込み層 -> 文出力隠れ層
+	w_qQ = Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE), # 出力埋め込み層 -> 文出力隠れ層
 	w_yq = EmbedID(TRG_VOCAB_SIZE, 4 * HIDDEN_SIZE), # 出力層(one-hot) -> 出力隠れ層
 	w_qq = Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE), # 出力隠れ層 -> 出力隠れ層
 	w_qj = Linear(HIDDEN_SIZE, TRG_EMBED_SIZE), # 出力隠れ層 -> 出力埋め込み層
@@ -172,17 +122,13 @@ def forward(src_sentences, trg_sentences, model, training):
 		src_sentence2 = []
 		for word in src_sentence:
 			try:
-				#src_sentence2.append(vocabIDdic[word])
-				src_sentence2.append(word)
+				src_sentence2.append(vocabIDdic[word])
+				#src_sentence2.append(word)
 			except:
 				print word
 				src_sentence2.append(SRC_VOCAB_SIZE - 1)
-		#src_sentence = [ japaneseIDdic[word.decode("utf-8")] for word in src_sentence]
-		#trg_sentence = [ englishIDdic[word] for word in trg_sentence] + [END_OF_SENTENCE]
-		src_sentence = src_sentence2
 		#print src_sentence
-		if 0 in src_sentence:
-			src_sentence.remove(0)
+		src_sentence = src_sentence2
 		#print src_sentence
 		src_sentenceList.append(src_sentence)
 	trg_sentenceList = []
@@ -190,8 +136,8 @@ def forward(src_sentences, trg_sentences, model, training):
 		trg_sentence2 = []
 		for word in trg_sentence:
 			try:
-				#trg_sentence2.append(vocabIDdic[word])
-				trg_sentence2.append(word)
+				trg_sentence2.append(vocabIDdic[word])
+				#trg_sentence2.append(word)
 			except:
 				print word
 				trg_sentence2.append(TRG_VOCAB_SIZE - 1)
@@ -199,16 +145,12 @@ def forward(src_sentences, trg_sentences, model, training):
 			trg_sentence2 = (trg_sentence2 + [END_OF_SENTENCE])
 		else:
 			trg_sentence2 = (trg_sentence2 + [END_OF_SENTENCES])
+		#print trg_sentence
 		trg_sentence = trg_sentence2
 		#print trg_sentence
-		if 0 in trg_sentence:
-			trg_sentence.remove(0)
 		trg_sentenceList.append(trg_sentence)
-		#print trg_sentence 
-		#print "===="
-		#print trg_sentence
 		# LSTM内部状態の初期値
-	X_list = []
+	#X_list = []
 	for src_sentence in src_sentenceList:
 		c = Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
 		# エンコーダ
@@ -236,7 +178,6 @@ def forward(src_sentences, trg_sentences, model, training):
 		hyp_sentences = []
 		hyp_sentence = []
 		for trg_sentence in trg_sentenceList:
-			#accum_loss = xp.zeros((), dtype=np.float32)
 			accum_loss = chainer.Variable(xp.zeros((), dtype=np.float32))
 			for word in trg_sentence:
 				q = model.w_Qq(Q)
@@ -244,26 +185,15 @@ def forward(src_sentences, trg_sentences, model, training):
 				#j = tanh(model.w_qj(Q))
 				y = model.w_jy(j)
 				word2 = y.data.argmax(1)[0]
-				#t = Variable(xp.array([word], dtype=np.int32))
 				t = Variable(xp.array([word], dtype=np.int32))
-				#correctword = xp.zeros((1,TRG_VOCAB_SIZE),dtype=np.float32)
-				#print correctword
-				#correctword[0][word] = 1.0
-				#print correctword
-				#t2 =  Variable(correctword)
 				loss = softmax_cross_entropy(y, t)
-				#loss = mean_squared_error(y,t2)
 				#print loss.data
 				accum_loss += loss
-				#print loss
 				c, q = lstm(c, model.w_yq(t) + model.w_qq(q))
 				hyp_sentence.append(word2)
 			hyp_sentences.append(hyp_sentence)
-			C, Q = lstm(C, model.w_PQ(model.w_qQ(q)) + model.w_QQ(Q))
+			C, Q = lstm(C, model.w_qQ(q) + model.w_QQ(Q))
 		return accum_loss, hyp_sentences, trg_sentenceList
-		# エンコーダ -> デコーダ
-		#c, q = lstm(c, model.w_pq(p))
-		# デコーダ
 	else:
 		hyp_sentences = []
 		hyp_sentence = []
@@ -275,30 +205,22 @@ def forward(src_sentences, trg_sentences, model, training):
 			#j = tanh(model.w_qj(Q))
 			y = model.w_jy(j)
 			word = y.data.argmax(1)[0]
+			t = Variable(xp.array([word], dtype=np.int32))
+			c, q = lstm(c, model.w_yq(t) + model.w_qq(q))
 			#print word
-			#if word == END_OF_SENTENCES:
-				#break # 終端記号が生成されたので終了
-			if (word != END_OF_SENTENCE) & (len(hyp_sentence) < 20): # 100単語以上は生成しないようにする
-				hyp_sentence.append(word)
-				#except:
-					#hyp_sentence.append("<UNKNOWN>" + str(word))
-				s_y = Variable(xp.array([word], dtype=np.int32))
-				c, q = lstm(c, model.w_yq(s_y) + model.w_qq(q))
-			else:
+			if word == END_OF_SENTENCES:
 				hyp_sentences.append(hyp_sentence)
-				C, Q = lstm(C, model.w_PQ(model.w_qQ(q)) + model.w_QQ(Q))
-				#C, Q = lstm(C, model.w_PQ(q) + model.w_QQ(Q))
-				#print len(hyp_sentence)
+				break # 終端記号が生成されたので終了
+			if (word == END_OF_SENTENCE) | (len(hyp_sentence) >= 20): # 20単語以上は生成しないようにする
+				hyp_sentences.append(hyp_sentence)
+				C, Q = lstm(C, model.w_qQ(q) + model.w_QQ(Q))
 				hyp_sentence = []
-			#print len(hyp_sentences)
-			s_y = Variable(xp.array([word], dtype=np.int32))
-			c, q = lstm(c, model.w_yq(s_y) + model.w_qq(q))
 		return hyp_sentences
 
-forward(smallyahooboardsentences[0], smallyahooboardsentences[0], model, training = True)
+forward(sentenceslist_file[1][2], sentenceslist_file[1][2], model, training = True)
 N = 1000
 
-def train(japansentencsetdoc,englishsentencsetdoc,model,N = N):
+def train(japansentencsetdocList,englishsentencsetdocList,model,N = N):
 	#perm = np.random.permutation(N)
 	opt = SGD() # 確率的勾配法を使用
 	#opt = Adam()
@@ -307,14 +229,21 @@ def train(japansentencsetdoc,englishsentencsetdoc,model,N = N):
 	#perm = np.random.permutation(N)
 	accum_loss_sum = chainer.Variable(xp.zeros((), dtype=np.float32))
 	#for i, textID in enumerate(np.array(range(N))[perm]):
-	for i, textID in enumerate(np.array(range(N))):
-		opt.zero_grads() # 勾配の初期化
-		accum_loss,_,_ = forward(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True) # 損失の計算
-		accum_loss_sum += accum_loss
-		accum_loss.backward() # 誤差逆伝播
-		opt.clip_grads(10) # 大きすぎる勾配を抑制
-		opt.update() # パラメータの更新
+	for k in range(1,N):
+		japansentencsetdoc = japansentencsetdocList[k]
+		#print japansentencsetdocList[k]
+		englishsentencsetdoc = englishsentencsetdocList[k]
+		for i, textID in enumerate(np.array(range(1,len(japansentencsetdoc)))):
+			opt.zero_grads() # 勾配の初期化
+			#print textID
+			accum_loss,_,_ = forward(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True) # 損失の計算
+			accum_loss_sum += accum_loss
+			accum_loss.backward() # 誤差逆伝播
+			opt.clip_grads(10) # 大きすぎる勾配を抑制
+			opt.update() # パラメータの更新
 	print accum_loss_sum.data
+
+train(sentenceslist_file, sentenceslist_file,model,N = 2)
 
 """
 def train(japansentencsetdoc,englishsentencsetdoc,model,N = N,batchsize = 10):
@@ -350,40 +279,47 @@ def train(japansentencsetdoc,englishsentencsetdoc,model,N = N,batchsize = 10):
 def Test(japantest,englishtest,n):
 	text = ""
 	hyp_sentencelist = []
-	hyp_sentence = forward(japantest[n],englishtest[n],model, training = False)
+	hyp_sentences = forward(japantest[n],englishtest[n],model, training = False)
 	for sentence in japantest[n]:
 		for w in sentence:
-			text = text + vocabworddic[w]
+			text = text + w
+		text += "\n"
+			#text = text + vocabworddic[w]
 	print "=====問題======"
 	print text
 	print "=====正解======"
-	print englishtest[n]
+	print text
 	print "=====予測======"
-	for s in hyp_sentence:
+	for s in hyp_sentences:
 		for w in s:
 			try:
 				hyp_sentencelist.append(vocabworddic[int(w)])
 			except:
 				hyp_sentencelist.append(str(w) + "unk")
-	print ' '.join(hyp_sentencelist)
+		print ' '.join(hyp_sentencelist)
+		hyp_sentencelist = []
 
-hyp_sentence = forward(smallyahooboardsentences[0],smallyahooboardsentences[0],model, training = True)
-Test(smallyahooboardsentences, smallyahooboardsentences,0)
+hyp_sentence = forward(sentenceslist_file[1][2],sentenceslist_file[1][2],model, training = True)
+Test(sentenceslist_file[1], sentenceslist_file[1],0)
 #vocabworddic
 
 
 
 for i in range(0,200):
 	print i
-	train(smallyahooboardsentences[0:3000],smallyahooboardsentences[0:3000],model,N = 3000)
+	train(sentenceslist_file, sentenceslist_file,model,N = 100)
 	#hyp_sentence = forward(smallyahooboardsentences[0],smallyahooboardsentences[0],model, training = False)
-	hyp_sentence = forward(smallyahooboardsentences[N],smallyahooboardsentences[N],model, training = False)
-	Test(smallyahooboardsentences, smallyahooboardsentences,0)
-	Test(smallyahooboardsentences, smallyahooboardsentences,N)
+	hyp_sentence = forward(sentenceslist_file[1][2],sentenceslist_file[1][2],model, training = True)
+	print hyp_sentence[0]
+	print hyp_sentence[1]
+	print hyp_sentence[2]
+	Test(sentenceslist_file[1], sentenceslist_file[1],0)
+	Test(sentenceslist_file[100], sentenceslist_file[100],0)
 
 
 # Save final model
 import pickle
+pickle.dump(model, open("lyric/Hieralchicals2s.dump", 'wb'), -1)
 #pickle.dump(model, open("model20000_2.dump", 'wb'), -1)
 pickle.dump(model.to_cpu(), open("model20000_2.dump", 'wb'), -1)
 pickle.dump(japaneseIDdic,open("japaneseIDdic.dump", 'wb'), -1)

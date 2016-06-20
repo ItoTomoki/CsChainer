@@ -21,7 +21,6 @@ parser.add_argument('--gpu', '-g', default=-1, type=int,
                     help='GPU ID (negative value indicates CPU)')
 args = parser.parse_args()
 
-args.gpu = 2
 #xp = cuda.cupy if args.gpu >= 0 else np
 if args.gpu >= 0:
 	xp = cuda.cupy
@@ -131,21 +130,21 @@ for i in range(0,100):
 """
 
 SRC_VOCAB_SIZE = (len(vocablist) + 3)
-SRC_EMBED_SIZE  = 200
+SRC_EMBED_SIZE  = (len(vocablist) + 3)
 HIDDEN_SIZE = 100
 TRG_VOCAB_SIZE = (len(vocablist) + 3)
-TRG_EMBED_SIZE = 200
+TRG_EMBED_SIZE = (len(vocablist) + 3)
 model = FunctionSet(
 	w_xi = EmbedID(SRC_VOCAB_SIZE, SRC_EMBED_SIZE), # 入力層(one-hot) -> 入力埋め込み層
 	w_ip = Linear(SRC_EMBED_SIZE, 4 * HIDDEN_SIZE), # 入力埋め込み層 -> 入力隠れ層
 	w_pp = Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE), # 入力隠れ層 -> 入力隠れ層
-	w_pI = Linear(HIDDEN_SIZE, HIDDEN_SIZE), # 入力隠れ層 -> 文入力埋め込み層
+	#w_pI = Linear(HIDDEN_SIZE, HIDDEN_SIZE), # 入力隠れ層 -> 文入力埋め込み層
 	w_IP = Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE), # 文入力埋め込み層 -> 文入力隠れ層
 	w_PP = Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE), # 文入力隠れ層 -> 文入力隠れ層
 	w_PQ = Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE), # 文入力隠れ層 -> 文出力隠れ層
 	w_QQ = Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE), # 文出力隠れ層 -> 文出力隠れ層
-	w_Qq = Linear(HIDDEN_SIZE, HIDDEN_SIZE), # 文出力隠れ層 -> 出力埋め込み層
-	w_qQ = Linear(HIDDEN_SIZE, HIDDEN_SIZE), # 出力埋め込み層 -> 文出力隠れ層
+	#w_Qq = Linear(HIDDEN_SIZE, HIDDEN_SIZE), # 文出力隠れ層 -> 出力埋め込み層
+	#w_qQ = Linear(HIDDEN_SIZE, HIDDEN_SIZE), # 出力埋め込み層 -> 文出力隠れ層
 	w_yq = EmbedID(TRG_VOCAB_SIZE, 4 * HIDDEN_SIZE), # 出力層(one-hot) -> 出力隠れ層
 	w_qq = Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE), # 出力隠れ層 -> 出力隠れ層
 	w_qj = Linear(HIDDEN_SIZE, TRG_EMBED_SIZE), # 出力隠れ層 -> 出力埋め込み層
@@ -180,10 +179,6 @@ def forward(src_sentences, trg_sentences, model, training):
 		#src_sentence = [ japaneseIDdic[word.decode("utf-8")] for word in src_sentence]
 		#trg_sentence = [ englishIDdic[word] for word in trg_sentence] + [END_OF_SENTENCE]
 		src_sentence = src_sentence2
-		#print src_sentence
-		if 0 in src_sentence:
-			src_sentence.remove(0)
-		#print src_sentence
 		src_sentenceList.append(src_sentence)
 	trg_sentenceList = []
 	for i,trg_sentence in enumerate(trg_sentences):
@@ -200,12 +195,7 @@ def forward(src_sentences, trg_sentences, model, training):
 		else:
 			trg_sentence2 = (trg_sentence2 + [END_OF_SENTENCES])
 		trg_sentence = trg_sentence2
-		#print trg_sentence
-		if 0 in trg_sentence:
-			trg_sentence.remove(0)
 		trg_sentenceList.append(trg_sentence)
-		#print trg_sentence 
-		#print "===="
 		#print trg_sentence
 		# LSTM内部状態の初期値
 	X_list = []
@@ -220,9 +210,9 @@ def forward(src_sentences, trg_sentences, model, training):
 			i = tanh(model.w_xi(x))
 			c, p = lstm(c, model.w_ip(i) + model.w_pp(p))
 		# エンコーダ埋め込み -> 文エンコーダ埋め込み
-		X = model.w_pI(p)
-		X_list.append(X)
-		#X_list.append(p)
+		#X = model.w_pI(c)
+		#X_list.append(X)
+		X_list.append(p)
 	#文エンコーダ
 	C = Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
 	X = X_list[0]
@@ -233,34 +223,22 @@ def forward(src_sentences, trg_sentences, model, training):
 	C, Q = lstm(C, model.w_PQ(P)) #Q: 文ベクトル
 	#文デコーダ
 	if training:
-		hyp_sentences = []
-		hyp_sentence = []
 		for trg_sentence in trg_sentenceList:
 			#accum_loss = xp.zeros((), dtype=np.float32)
 			accum_loss = chainer.Variable(xp.zeros((), dtype=np.float32))
 			for word in trg_sentence:
-				q = model.w_Qq(Q)
-				j = tanh(model.w_qj(q))
-				#j = tanh(model.w_qj(Q))
+				#q = model.w_Qq(Q)
+				#j = tanh(model.w_qj(q))
+				j = tanh(model.w_qj(Q))
 				y = model.w_jy(j)
-				word2 = y.data.argmax(1)[0]
-				#t = Variable(xp.array([word], dtype=np.int32))
 				t = Variable(xp.array([word], dtype=np.int32))
-				#correctword = xp.zeros((1,TRG_VOCAB_SIZE),dtype=np.float32)
-				#print correctword
-				#correctword[0][word] = 1.0
-				#print correctword
-				#t2 =  Variable(correctword)
 				loss = softmax_cross_entropy(y, t)
-				#loss = mean_squared_error(y,t2)
-				#print loss.data
 				accum_loss += loss
 				#print loss
-				c, q = lstm(c, model.w_yq(t) + model.w_qq(q))
-				hyp_sentence.append(word2)
-			hyp_sentences.append(hyp_sentence)
+				#c, q = lstm(c, model.w_yq(t) + model.w_qq(q))
+				c, Q = lstm(c, model.w_yq(t) + model.w_qq(Q))
 			C, Q = lstm(C, model.w_PQ(model.w_qQ(q)) + model.w_QQ(Q))
-		return accum_loss, hyp_sentences, trg_sentenceList
+		return accum_loss
 		# エンコーダ -> デコーダ
 		#c, q = lstm(c, model.w_pq(p))
 		# デコーダ
@@ -270,53 +248,57 @@ def forward(src_sentences, trg_sentences, model, training):
 	# 予測時には翻訳器が生成したyを次回の入力に使い、forwardの結果として生成された単語列を返す。
 	# yの中で最大の確率を持つ単語を選択していくが、softmaxを取る必要はない。
 		while len(hyp_sentences) < 2: #10文以上は生成しないようにする
-			q = model.w_Qq(Q)
-			j = tanh(model.w_qj(q))
-			#j = tanh(model.w_qj(Q))
+			#q = model.w_Qq(Q)
+			#j = tanh(model.w_qj(q))
+			j = tanh(model.w_qj(Q))
 			y = model.w_jy(j)
 			word = y.data.argmax(1)[0]
 			#print word
-			#if word == END_OF_SENTENCES:
-				#break # 終端記号が生成されたので終了
+			if word == END_OF_SENTENCES:
+				break # 終端記号が生成されたので終了
 			if (word != END_OF_SENTENCE) & (len(hyp_sentence) < 20): # 100単語以上は生成しないようにする
 				hyp_sentence.append(word)
 				#except:
 					#hyp_sentence.append("<UNKNOWN>" + str(word))
 				s_y = Variable(xp.array([word], dtype=np.int32))
-				c, q = lstm(c, model.w_yq(s_y) + model.w_qq(q))
+				#c, q = lstm(c, model.w_yq(s_y) + model.w_qq(q))
+				c, Q = lstm(c, model.w_yq(s_y) + model.w_qq(Q))
 			else:
 				hyp_sentences.append(hyp_sentence)
-				C, Q = lstm(C, model.w_PQ(model.w_qQ(q)) + model.w_QQ(Q))
+				#C, Q = lstm(C, model.w_PQ(model.w_qQ(q)) + model.w_QQ(Q))
 				#C, Q = lstm(C, model.w_PQ(q) + model.w_QQ(Q))
+				C, Q = lstm(C, model.w_PQ(Q) + model.w_QQ(Q))
 				#print len(hyp_sentence)
 				hyp_sentence = []
 			#print len(hyp_sentences)
 			s_y = Variable(xp.array([word], dtype=np.int32))
-			c, q = lstm(c, model.w_yq(s_y) + model.w_qq(q))
+			#c, q = lstm(c, model.w_yq(s_y) + model.w_qq(q))
+			c, Q = lstm(c, model.w_yq(s_y) + model.w_qq(Q))
 		return hyp_sentences
 
 forward(smallyahooboardsentences[0], smallyahooboardsentences[0], model, training = True)
 N = 1000
 
-def train(japansentencsetdoc,englishsentencsetdoc,model,N = N):
-	#perm = np.random.permutation(N)
-	opt = SGD() # 確率的勾配法を使用
-	#opt = Adam()
+def train(japansentencsetdoc,englishsentencsetdoc,model,N = N,batchsize = 10):
+	perm = np.random.permutation(N)
+	#opt = SGD() # 確率的勾配法を使用
+	opt = Adam()
 	opt.setup(model) # 学習器の初期化
 	#for sentence in sentence_set:
-	#perm = np.random.permutation(N)
+	perm = np.random.permutation(N)
 	accum_loss_sum = chainer.Variable(xp.zeros((), dtype=np.float32))
-	#for i, textID in enumerate(np.array(range(N))[perm]):
-	for i, textID in enumerate(np.array(range(N))):
+	accum_loss_sum2 = chainer.Variable(xp.zeros((), dtype=np.float32))
+	batch_size_array = xp.array(batchsize, dtype=xp.float32)
+	for i, textID in enumerate(np.array(range(N))[perm]):
 		opt.zero_grads() # 勾配の初期化
-		accum_loss,_,_ = forward(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True) # 損失の計算
-		accum_loss_sum += accum_loss
-		accum_loss.backward() # 誤差逆伝播
-		opt.clip_grads(10) # 大きすぎる勾配を抑制
+		accum_loss = forward(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True) # 損失の計算
+		#accum_loss_sum = accum_loss_sum / chainer.Variable(batch_size_array)
+		accum_loss_sum.backward() # 誤差逆伝播
+		#opt.clip_grads(10) # 大きすぎる勾配を抑制
 		opt.update() # パラメータの更新
-	print accum_loss_sum.data
+		accum_loss = chainer.Variable(xp.zeros((), dtype=np.float32))
+		print accum_loss.data
 
-"""
 def train(japansentencsetdoc,englishsentencsetdoc,model,N = N,batchsize = 10):
 	perm = np.random.permutation(N)
 	#opt = SGD() # 確率的勾配法を使用
@@ -329,23 +311,18 @@ def train(japansentencsetdoc,englishsentencsetdoc,model,N = N,batchsize = 10):
 	opt.zero_grads() # 勾配の初期化
 	batch_size_array = xp.array(batchsize, dtype=xp.float32)
 	for i, textID in enumerate(np.array(range(N))[perm]):
-		accum_loss,hyps, trgs = forward(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True) # 損失の計算
+		accum_loss = forward(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True) # 損失の計算
 		accum_loss_sum += accum_loss
-		accum_loss_sum2 += accum_loss
-		#print i, textID
+		print i, textID
 		if i % batchsize == 0:
-			#accum_loss_sum = accum_loss_sum / chainer.Variable(batch_size_array)
+			accum_loss_sum = accum_loss_sum / chainer.Variable(batch_size_array)
 			accum_loss_sum.backward() # 誤差逆伝播
 			#opt.clip_grads(10) # 大きすぎる勾配を抑制
 			opt.update() # パラメータの更新
-			#print accum_loss_sum.data
+			print accum_loss_sum.data
 			accum_loss_sum = chainer.Variable(xp.zeros((), dtype=np.float32))
 			opt.zero_grads() # 勾配の初期化
-	accum_loss_sum2 = accum_loss_sum2/ chainer.Variable(xp.array(N, dtype=xp.float32))
-	print accum_loss_sum2.data
-	print hyps
-	print trgs
-"""
+	print accum_loss_sum.data
 
 def Test(japantest,englishtest,n):
 	text = ""
@@ -361,21 +338,25 @@ def Test(japantest,englishtest,n):
 	print "=====予測======"
 	for s in hyp_sentence:
 		for w in s:
-			try:
-				hyp_sentencelist.append(vocabworddic[int(w)])
-			except:
-				hyp_sentencelist.append(str(w) + "unk")
+			hyp_sentencelist.append(vocabworddic[int(w)])
 	print ' '.join(hyp_sentencelist)
 
-hyp_sentence = forward(smallyahooboardsentences[0],smallyahooboardsentences[0],model, training = True)
+hyp_sentence = forward(smallyahooboardsentences[0],smallyahooboardsentences[0],model, training = False)
 Test(smallyahooboardsentences, smallyahooboardsentences,0)
-#vocabworddic
+vocabworddic
 
+def test(sentence):
+	tagger = MeCab.Tagger( '-Owakati -u /usr/local/Cellar/mecab/0.996/lib/mecab/dic/ipadic/wikipedia-keyword.dic')
+	wordarrays = tagger.parse(sentence).split(" ")[0:-1]
+	#wordarrays = sentence
+	print wordarrays
+	print (wordarrays == japantest[0])
+	hyp_sentence = forward(wordarrays,['did', 'you', 'clean', 'your', 'room', '?'],model,training = False)
+	print hyp_sentence
 
-
-for i in range(0,200):
+for i in range(0,5):
 	print i
-	train(smallyahooboardsentences[0:3000],smallyahooboardsentences[0:3000],model,N = 3000)
+	train(smallyahooboardsentences[0:100],smallyahooboardsentences[0:100],model,N = 100)
 	#hyp_sentence = forward(smallyahooboardsentences[0],smallyahooboardsentences[0],model, training = False)
 	hyp_sentence = forward(smallyahooboardsentences[N],smallyahooboardsentences[N],model, training = False)
 	Test(smallyahooboardsentences, smallyahooboardsentences,0)
