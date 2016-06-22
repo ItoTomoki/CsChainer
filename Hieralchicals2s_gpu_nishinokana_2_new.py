@@ -1,5 +1,4 @@
 #encoding:utf-8
-#https://arxiv.org/abs/1506.01057
 #データ読み込み
 import json
 import os
@@ -23,7 +22,7 @@ parser.add_argument('--gpu', '-g', default=-1, type=int,
                     help='GPU ID (negative value indicates CPU)')
 args = parser.parse_args()
 
-args.gpu = 3
+args.gpu = 1
 #xp = cuda.cupy if args.gpu >= 0 else np
 if args.gpu >= 0:
 	xp = cuda.cupy
@@ -81,10 +80,6 @@ from chainer.functions import *
 from chainer import Variable
 from chainer.optimizers import *
 
-state = {name: chainer.Variable(xp.zeros((1, HIDDEN_SIZE),
-	dtype=np.float32))
-	for name in ('c1', 'c2', 'C1', 'C2', 'C3')}
-
 SRC_VOCAB_SIZE = (len(vocablist) + 3)
 SRC_EMBED_SIZE  = 200
 HIDDEN_SIZE = 100
@@ -105,11 +100,6 @@ model = FunctionSet(
 	w_QQ = Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE), # 文出力隠れ層 -> 文出力隠れ層
 	#w_Qq = Linear(HIDDEN_SIZE, HIDDEN_SIZE), # 文出力隠れ層 -> 出力埋め込み層
 	w_qQ = Linear(HIDDEN_SIZE_2, 4 * HIDDEN_SIZE), # 出力埋め込み層 -> 文出力隠れ層
-	# attentional weight estimator
-	w_Pw = Linear(HIDDEN_SIZE, HIDDEN_SIZE),
-	w_Qw = Linear(HIDDEN_SIZE, HIDDEN_SIZE),
-	w_we = Linear(HIDDEN_SIZE, 1),
-	w_cp = Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE),
 	#出力単語デコード
 	#w_yq = EmbedID(TRG_VOCAB_SIZE, 4 * HIDDEN_SIZE_2), # 出力層(one-hot) -> 出力隠れ層
 	w_iq = Linear(TRG_EMBED_SIZE, 4 * HIDDEN_SIZE_2), # 出力層(one-hot) -> 出力隠れ層
@@ -117,6 +107,9 @@ model = FunctionSet(
 	w_qj = Linear(HIDDEN_SIZE, TRG_EMBED_SIZE), # 出力隠れ層 -> 出力埋め込み層
 	w_jy = Linear(TRG_EMBED_SIZE, TRG_VOCAB_SIZE), # 出力入力層 -> 出力隠れ層
 )  
+
+for param in model.parameters:
+    param[:] = np.random.uniform(-0.1, 0.1, param.shape)
 
 if args.gpu >= 0:
     cuda.check_cuda_available()
@@ -126,6 +119,10 @@ if args.gpu >= 0:
 print "model_making"
 END_OF_SENTENCE = len(vocablist)
 END_OF_SENTENCES = (len(vocablist) + 1)
+
+state = {name: chainer.Variable(xp.zeros((1, HIDDEN_SIZE),
+	dtype=np.float32))
+	for name in ('c1', 'c2', 'C1', 'C2', 'C3')}
 
 # src_sentence: 翻訳したい単語列 e.g. ['彼', 'は', '走る']
 # trg_sentence: 正解の翻訳を表す単語列 e.g. ['he', 'runs']
@@ -172,7 +169,6 @@ def forward(src_sentences, trg_sentences, model, training,state):
 	C2 = state["C2"]
 	c2 = state["c2"]
 	C3 = state["C3"]
-	P_list = []
 	for sentebce_index,src_sentence in enumerate(reversed(src_sentenceList)):
 		# エンコーダ
 		x = Variable(xp.array([END_OF_SENTENCE], dtype=np.int32))
@@ -191,7 +187,6 @@ def forward(src_sentences, trg_sentences, model, training,state):
 			C1, P = lstm(C1, model.w_IP(p))
 		else:
 			C1, P = lstm(C1, model.w_IP(p) + model.w_PP(P))
-		P_list.append(P)
 	#文エンコーダ -> 文デコーダ
 	C2, Q = lstm(C2, model.w_PQ(P)) #Q: 文ベクトル
 	q = Q
@@ -217,23 +212,8 @@ def forward(src_sentences, trg_sentences, model, training,state):
 				hyp_sentence.append(word2)
 			hyp_sentences.append(hyp_sentence)
 			hyp_sentence = []
-			# calculate attention weights
-			list_e = []
-			sum_e = chainer.Variable(xp.zeros((1,1), dtype=np.float32))
-			for P in P_list:
-				v_i = model.w_we(tanh(model.w_Qw(Q) + model.w_Pw(P))) #v_i: scalar
-				exp_v_i = exp(v_i)
-				list_e.append(exp_v_i)
-				sum_e += exp_v_i
-			# make attention vector
-			m_t = Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
-			for n in range(len(P_list)):
-				a_i = list_e[n] / sum_e
-				m_t += matmul(a_i ,P_list[n])
-			# generate next word
 			#print q.data == Q.data
-			#C, Q = lstm(C, model.w_qQ(q) + model.w_QQ(Q))
-			C3, Q = lstm(C3, model.w_qQ(q) + model.w_QQ(Q) + model.w_cp(m_t))
+			C3, Q = lstm(C3, model.w_qQ(q) + model.w_QQ(Q))
 		state = {"c1":c1,"c2":c2,"C1":C1,"C2":C2,"C3":C3}
 		return accum_loss, hyp_sentences, trg_sentenceList,state
 		# エンコーダ -> デコーダ
@@ -259,21 +239,8 @@ def forward(src_sentences, trg_sentences, model, training,state):
 				hyp_sentences.append(hyp_sentence)
 				break # 終端記号が生成されたので終了
 			if (word == END_OF_SENTENCE) | (len(hyp_sentence) >= 20): # 20単語以上は生成しないようにする
-				list_e = []
-				sum_e = chainer.Variable(xp.zeros((1,1), dtype=np.float32))
-				for P in P_list:
-					v_i = model.w_we(tanh(model.w_Qw(Q) + model.w_Pw(P))) #v_i: scalar
-					exp_v_i = exp(v_i)
-					list_e.append(exp_v_i)
-					sum_e += exp_v_i
-				# make attention vector
-				m_t = Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
-				for n in range(len(P_list)):
-					a_i = list_e[n] / sum_e
-					m_t += matmul(a_i ,P_list[n])
 				hyp_sentences.append(hyp_sentence)
-				#C, Q = lstm(C, model.w_qQ(q) + model.w_QQ(Q))
-				C3, Q = lstm(C3, model.w_qQ(q) + model.w_QQ(Q) + model.w_cp(m_t))
+				C3, Q = lstm(C3, model.w_qQ(q) + model.w_QQ(Q))
 				#print len(hyp_sentence)
 				hyp_sentence = []
 		return hyp_sentences
@@ -281,7 +248,7 @@ def forward(src_sentences, trg_sentences, model, training,state):
 forward(sentenceslist_file[1][2], sentenceslist_file[1][2], model, training = True,state = state)
 N = 1000
 
-def train(japansentencsetdocList,englishsentencsetdocList,model,state,N = N):
+def train(japansentencsetdocList,englishsentencsetdocList,model,state, N = N):
 	#perm = np.random.permutation(N)
 	#opt = SGD() # 確率的勾配法を使用
 	opt = Adam()
@@ -303,9 +270,9 @@ def train(japansentencsetdocList,englishsentencsetdocList,model,state,N = N):
 			#opt.clip_grads(10) # 大きすぎる勾配を抑制
 			opt.update() # パラメータの更新
 	print accum_loss_sum.data
-	return accum_loss_sum.data, state
+	return accum_loss_sum, state
 
-train(sentenceslist_file, sentenceslist_file,model,state, N = 2)
+train(sentenceslist_file, sentenceslist_file,model,N = 2,state = state)
 
 """
 def train(japansentencsetdoc,englishsentencsetdoc,model,N = N,batchsize = 10):
@@ -361,27 +328,27 @@ def Test(japantest,englishtest,n,state):
 		print ' '.join(hyp_sentencelist)
 		hyp_sentencelist = []
 
-hyp_sentence = forward(sentenceslist_file[1][2],sentenceslist_file[1][2],model, training = True,state = state)
-Test(sentenceslist_file[1], sentenceslist_file[1],0, state = state)
+hyp_sentence = forward(sentenceslist_file[1][2],sentenceslist_file[1][2],model, training = True, state = state)
+Test(sentenceslist_file[1], sentenceslist_file[1],0,state)
 #vocabworddic
 
 
 
 for i in range(0,100):
 	print i
-	accum_loss, state = train(sentenceslist_file, sentenceslist_file,model,N = 100,state = state)
+	accum_loss,state = train(sentenceslist_file, sentenceslist_file,model,N = 100, state = state)
 	#hyp_sentence = forward(smallyahooboardsentences[0],smallyahooboardsentences[0],model, training = False)
 	hyp_sentence = forward(sentenceslist_file[1][0],sentenceslist_file[1][0],model, training = True, state = state)
 	print hyp_sentence[0].data
 	print hyp_sentence[1]
 	print hyp_sentence[2]
-	Test(sentenceslist_file[1], sentenceslist_file[1],0, state = state)
-	Test(sentenceslist_file[100], sentenceslist_file[100],0, state = state)
+	Test(sentenceslist_file[1], sentenceslist_file[1],0)
+	Test(sentenceslist_file[100], sentenceslist_file[100],0)
 
 
 # Save final model
 import pickle
-pickle.dump(model.to_cpu(), open("lyric/Hieralchical_s2s_attention.dump", 'wb'), -1)
+pickle.dump(model, open("lyric/Hieralchicals2s.dump", 'wb'), -1)
 #pickle.dump(model, open("model20000_2.dump", 'wb'), -1)
 pickle.dump(model.to_cpu(), open("model20000_2.dump", 'wb'), -1)
 pickle.dump(japaneseIDdic,open("japaneseIDdic.dump", 'wb'), -1)

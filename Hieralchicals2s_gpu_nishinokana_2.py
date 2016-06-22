@@ -22,7 +22,7 @@ parser.add_argument('--gpu', '-g', default=-1, type=int,
                     help='GPU ID (negative value indicates CPU)')
 args = parser.parse_args()
 
-args.gpu = 3
+args.gpu = 1
 #xp = cuda.cupy if args.gpu >= 0 else np
 if args.gpu >= 0:
 	xp = cuda.cupy
@@ -108,6 +108,9 @@ model = FunctionSet(
 	w_jy = Linear(TRG_EMBED_SIZE, TRG_VOCAB_SIZE), # 出力入力層 -> 出力隠れ層
 )  
 
+for param in model.parameters:
+    param[:] = np.random.uniform(-0.1, 0.1, param.shape)
+
 if args.gpu >= 0:
     cuda.check_cuda_available()
     cuda.get_device(args.gpu).use()
@@ -117,10 +120,14 @@ print "model_making"
 END_OF_SENTENCE = len(vocablist)
 END_OF_SENTENCES = (len(vocablist) + 1)
 
+state = {name: chainer.Variable(xp.zeros((1, HIDDEN_SIZE),
+	dtype=np.float32))
+	for name in ('c1', 'c2', 'C1', 'C2', 'C3')}
+
 # src_sentence: 翻訳したい単語列 e.g. ['彼', 'は', '走る']
 # trg_sentence: 正解の翻訳を表す単語列 e.g. ['he', 'runs']
 # training: 学習か予測か。デコーダの挙動に影響する。
-def forward(src_sentences, trg_sentences, model, training):
+def forward(src_sentences, trg_sentences, model, training):#,state):
 	# 単語IDへの変換（自分で適当に実装する）
 	# 正解の翻訳には終端記号を追加しておく。
 	src_sentenceList = []
@@ -157,9 +164,14 @@ def forward(src_sentences, trg_sentences, model, training):
 		trg_sentenceList.append(trg_sentence)
 		# LSTM内部状態の初期値
 	#X_list = []
-	C = Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
+	#C1 = state["C1"]
+	#c1 = state["c1"]
+	#C2 = state["C2"]
+	#c2 = state["c2"]
+	#C3 = state["C3"]
+	c = chainer.Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
+	C = chainer.Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
 	for sentebce_index,src_sentence in enumerate(reversed(src_sentenceList)):
-		c = Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
 		# エンコーダ
 		x = Variable(xp.array([END_OF_SENTENCE], dtype=np.int32))
 		i = tanh(model.w_xi(x))
@@ -204,7 +216,8 @@ def forward(src_sentences, trg_sentences, model, training):
 			hyp_sentence = []
 			#print q.data == Q.data
 			C, Q = lstm(C, model.w_qQ(q) + model.w_QQ(Q))
-		return accum_loss, hyp_sentences, trg_sentenceList
+		#state = {"c1":c1,"c2":c2,"C1":C1,"C2":C2,"C3":C3}
+		return accum_loss, hyp_sentences, trg_sentenceList#,state
 		# エンコーダ -> デコーダ
 		#c, q = lstm(c, model.w_pq(p))
 		# デコーダ
@@ -237,7 +250,7 @@ def forward(src_sentences, trg_sentences, model, training):
 forward(sentenceslist_file[1][2], sentenceslist_file[1][2], model, training = True)
 N = 1000
 
-def train(japansentencsetdocList,englishsentencsetdocList,model,N = N):
+def train(japansentencsetdocList,englishsentencsetdocList,model, N = N):
 	#perm = np.random.permutation(N)
 	#opt = SGD() # 確率的勾配法を使用
 	opt = Adam()
@@ -259,6 +272,7 @@ def train(japansentencsetdocList,englishsentencsetdocList,model,N = N):
 			#opt.clip_grads(10) # 大きすぎる勾配を抑制
 			opt.update() # パラメータの更新
 	print accum_loss_sum.data
+	#return accum_loss_sum, state
 
 train(sentenceslist_file, sentenceslist_file,model,N = 2)
 
@@ -322,7 +336,7 @@ Test(sentenceslist_file[1], sentenceslist_file[1],0)
 
 
 
-for i in range(0,200):
+for i in range(0,100):
 	print i
 	train(sentenceslist_file, sentenceslist_file,model,N = 100)
 	#hyp_sentence = forward(smallyahooboardsentences[0],smallyahooboardsentences[0],model, training = False)

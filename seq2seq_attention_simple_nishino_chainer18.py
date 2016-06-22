@@ -87,6 +87,7 @@ HIDDEN_SIZE = 100
 HIDDEN_SIZE2 = 50
 TRG_VOCAB_SIZE = (len(vocablist) + 3)
 TRG_EMBED_SIZE = 200
+"""
 model = FunctionSet(
 	#encode
 	w_xi = EmbedID(SRC_VOCAB_SIZE, SRC_EMBED_SIZE), # 入力層(one-hot) -> 入力埋め込み層
@@ -107,14 +108,246 @@ model = FunctionSet(
 	w_qj = Linear(HIDDEN_SIZE, TRG_EMBED_SIZE), # 出力隠れ層 -> 出力埋め込み層
 	w_jy = Linear(TRG_EMBED_SIZE, TRG_VOCAB_SIZE), # 出力隠れ層 -> 出力隠れ層
 )  
+"""
 
-for param in model.parameters:
-    param[:] = np.random.uniform(-0.1, 0.1, param.shape)
+import chainer
+import chainer.functions as F
+import chainer.links as L
 
+from __future__ import print_function
+import argparse
+import math
+import sys
+import time
+
+import numpy as np
+import six
+
+import six.moves.cPickle as pickle
+
+import chainer
+from chainer import cuda
+import chainer.links as L
+from chainer import optimizers
+from chainer import serializers
+
+class Encoder(chainer.Chain):
+
+    """Recurrent neural net languabe model for penn tree bank corpus.
+    This is an example of deep LSTM network for infinite length input.
+    """
+    def __init__(self, SRC_VOCAB_SIZE,SRC_EMBED_SIZE, HIDDEN_SIZE, HIDDEN_SIZE2,train=True):
+        super(RNNLM, self).__init__(
+            w_xi = L.EmbedID(SRC_VOCAB_SIZE, SRC_EMBED_SIZE), # 入力層(one-hot) -> 入力埋め込み層
+            w_ip = L.LSTM(SRC_EMBED_SIZE, HIDDEN_SIZE), # 入力埋め込み層 -> 入力隠れ層
+            w_iP = L.LSTM(SRC_EMBED_SIZE, HIDDEN_SIZE2), # 入力埋め込み層 -> 入力attention隠れ層
+			)
+        self.train = train
+
+    def reset_state(self):
+        self.w_ip.reset_state()
+        self.w_iP.reset_state()
+        self.w_pq.reset_state()
+    def __call__(self, x):
+        i = self.w_xi(x)
+		p = self.w_ip(i)
+		P = self.w_iP(i)
+		return P,p
+
+class Attention(Chain):
+  def __init__(self, HIDDEN_SIZE2,HIDDEN_SIZE):
+    super(Attention, self).__init__(
+        w_pw = Linear(HIDDEN_SIZE2, HIDDEN_SIZE),
+        w_qw = Linear(HIDDEN_SIZE, HIDDEN_SIZE),
+        w_we = Linear(HIDDEN_SIZE, 1),
+    )
+    self.HIDDEN_SIZE2 = HIDDEN_SIZE2
+    self.HIDDEN_SIZE = HIDDEN_SIZE
+  def __call__(self, P_all, Pw_list,q): #p:h
+    list_e = []
+    sum_e = chainer.Variable(xp.zeros((1,1), dtype=np.float32))
+    for P_w in Pw_list:
+    	v_i_plus = model.w_we(tanh(model.w_qw(q))) #v_i: scalar
+    	exp_v_i = exp(v_i_plus + P_w)
+    	list_e.append(exp_v_i)
+    	sum_e += exp_v_i
+    # make attention vector
+    for n, e in enumerate(list_e):
+    	if n == 0:
+    		e_all = (e / sum_e)
+    	else:
+    		e_all = Variable_hstack(e_all, e / sum_e)
+	m_t = matmul(e_all,P_all)
+    return m_t,q
+
+class Decoder(chainer.Chain):
+
+    """Recurrent neural net languabe model for penn tree bank corpus.
+    This is an example of deep LSTM network for infinite length input.
+    """
+    def __init__(self, TRG_VOCAB_SIZE, TRG_EMBED_SIZE,HIDDEN_SIZE2, HIDDEN_SIZE,train=True):
+        super(RNNLM, self).__init__(
+        	w_cp = L.Linear(HIDDEN_SIZE2, 4 * HIDDEN_SIZE),
+            w_jq = L.Linear(TRG_EMBED_SIZE, HIDDEN_SIZE), # 出力層(one-hot) -> 出力隠れ層
+            w_qq = L.Linear(HIDDEN_SIZE, 4 * HIDDEN_SIZE),
+            w_qj = L.Linear(HIDDEN_SIZE, TRG_EMBED_SIZE), # 出力隠れ層 -> 出力隠れ層
+			w_jy = L.Linear(TRG_EMBED_SIZE, TRG_VOCAB_SIZE)
+			w_yj = L.EmbedID(TRG_VOCAB_SIZE, TRG_EMBED_SIZE)
+			)
+        self.train = train
+    def __call__(self, q,c, y,m_t):
+    	e = functions.tanh(self.w_yj(y))
+        c, q = functions.lstm(c, self.w_jq(e) + self.w_qq(q) + self.w_cp(m_t))
+		j_out = functions.tanh(self.w_qj(q))
+		return self.w_jy(j_out), c, q
+
+
+
+class AttentionMT(Chain):
+	def __init__(self, SRC_VOCAB_SIZE,SRC_EMBED_SIZE, HIDDEN_SIZE, HIDDEN_SIZE2):
+		super(AttentionMT, self).__init__(
+		enc = Encoder(SRC_VOCAB_SIZE,SRC_EMBED_SIZE, HIDDEN_SIZE, HIDDEN_SIZE2), #foward
+		att = Attention(HIDDEN_SIZE2,HIDDEN_SIZE),
+		w_pq = L.LSTM(HIDDEN_SIZE, HIDDEN_SIZE), # 入力隠れ層 -> 出力隠れ層
+		dec = Decoder(TRG_VOCAB_SIZE, TRG_EMBED_SIZE,HIDDEN_SIZE2, HIDDEN_SIZE),
+		)
+		self.SRC_VOCAB_SIZE = SRC_VOCAB_SIZE
+		self.SRC_EMBED_SIZE = SRC_EMBED_SIZE
+		self.HIDDEN_SIZE = HIDDEN_SIZE
+		self.HIDDEN_SIZE2 = HIDDEN_SIZE2
+	def __call__(self, x_list, y_list):
+		Pw_list  = []
+		for i,x in enumerate(x_list):
+			P,p = self.enc(x)
+			Pw_list.append(model.w_we(model.w_pw(P)))
+			if i == 0:
+				P_all = P
+			else:
+				P_all = Variable_vstack(P_all,P)
+		q = self.w_pq(p)
+		t_list = []
+		for y in y_list:
+			m_t,q = self.att(P_all,Pw_list,q)
+			t,c, q = self.dec(q,c, y,m_t)
+			t_list.append(t)
+		return t_list
+
+
+args = parser.parse_args()
+xp = cuda.cupy if args.gpu >= 0 else np
+
+n_epoch = args.epoch   # number of epochs
+n_units = args.unit  # number of units per layer
+batchsize = args.batchsize   # minibatch size
+bprop_len = args.bproplen   # length of truncated BPTT
+grad_clip = args.gradclip    # gradient norm threshold to clip
+
+
+lm = RNNLM(len(vocab), n_units)
+encdecatt_simple = AttentionMT(SRC_VOCAB_SIZE,SRC_EMBED_SIZE, HIDDEN_SIZE, HIDDEN_SIZE2)
+#model = L.Classifier(lm)
+model = L.Classifier(encdecatt_simple)
+model.compute_accuracy = False  # we only want the perplexity
+for param in model.params():
+    data = param.data
+    data[:] = np.random.uniform(-0.1, 0.1, data.shape)
 if args.gpu >= 0:
-    cuda.check_cuda_available()
     cuda.get_device(args.gpu).use()
     model.to_gpu()
+
+
+optimizer = optimizers.SGD(lr=1.)
+optimizer.setup(model)
+optimizer.add_hook(chainer.optimizer.GradientClipping(grad_clip))
+
+# Init/Resume
+if args.initmodel:
+    print('Load model from', args.initmodel)
+    serializers.load_npz(args.initmodel, model)
+if args.resume:
+    print('Load optimizer state from', args.resume)
+    serializers.load_npz(args.resume, optimizer)
+
+
+def evaluate(dataset):
+    # Evaluation routine
+    evaluator = model.copy()  # to use different state
+    evaluator.predictor.reset_state()  # initialize state
+    evaluator.predictor.train = False  # dropout does nothing
+
+    sum_log_perp = 0
+    for i in six.moves.range(dataset.size - 1):
+        x = chainer.Variable(xp.asarray(dataset[i:i + 1]), volatile='on')
+        t = chainer.Variable(xp.asarray(dataset[i + 1:i + 2]), volatile='on')
+        loss = evaluator(x, t)
+        sum_log_perp += loss.data
+    return math.exp(float(sum_log_perp) / (dataset.size - 1))
+
+
+# Learning loop
+whole_len = train_data.shape[0]
+jump = whole_len // batchsize
+cur_log_perp = xp.zeros(())
+epoch = 0
+start_at = time.time()
+cur_at = start_at
+accum_loss = 0
+batch_idxs = list(range(batchsize))
+print('going to train {} iterations'.format(jump * n_epoch))
+
+for i in six.moves.range(jump * n_epoch):
+    x = chainer.Variable(xp.asarray(
+        [train_data[(jump * j + i) % whole_len] for j in batch_idxs]))
+    t = chainer.Variable(xp.asarray(
+        [train_data[(jump * j + i + 1) % whole_len] for j in batch_idxs]))
+    loss_i = model(x, t)
+    accum_loss += loss_i
+    cur_log_perp += loss_i.data
+
+    if (i + 1) % bprop_len == 0:  # Run truncated BPTT
+        model.zerograds()
+        accum_loss.backward()
+        accum_loss.unchain_backward()  # truncate
+        accum_loss = 0
+        optimizer.update()
+
+    if (i + 1) % 10000 == 0:
+        now = time.time()
+        throuput = 10000. / (now - cur_at)
+        perp = math.exp(float(cur_log_perp) / 10000)
+        print('iter {} training perplexity: {:.2f} ({:.2f} iters/sec)'.format(
+            i + 1, perp, throuput))
+        cur_at = now
+        cur_log_perp.fill(0)
+
+    if (i + 1) % jump == 0:
+        epoch += 1
+        print('evaluate')
+        now = time.time()
+        perp = evaluate(valid_data)
+        print('epoch {} validation perplexity: {:.2f}'.format(epoch, perp))
+        cur_at += time.time() - now  # skip time of evaluation
+
+        if epoch >= 6:
+            optimizer.lr /= 1.2
+            print('learning rate =', optimizer.lr)
+
+    sys.stdout.flush()
+
+# Evaluate on test dataset
+print('test')
+test_perp = evaluate(test_data)
+print('test perplexity:', test_perp)
+
+# Save the model and the optimizer
+print('save the model')
+serializers.save_npz('rnnlm.model', model)
+print('save the optimizer')
+serializers.save_npz('rnnlm.state', optimizer)
+
+
+
+
 
 
 END_OF_SENTENCE = len(vocablist)
@@ -327,7 +560,6 @@ def forward2(src_sentence, trg_sentence, model, training):
 	# LSTM内部状態の初期値
 	c = chainer.Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
 	c2 = chainer.Variable(xp.zeros((1, HIDDEN_SIZE2),dtype=np.float32))
-	c3 = chainer.Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
 	#P_list = []
 	Pw_list = []
 	# エンコーダ
@@ -358,33 +590,28 @@ def forward2(src_sentence, trg_sentence, model, training):
 		accum_loss = Variable(xp.zeros((), dtype=np.float32))
 		for word in trg_sentence:
 			#attention
-			#list_e = []
-			#sum_e = chainer.Variable(xp.zeros((1,1), dtype=np.float32))
+			list_e = []
+			sum_e = chainer.Variable(xp.zeros((1,1), dtype=np.float32))
 			#for P in P_list:
-			v_i_plus = model.w_we(tanh(model.w_qw(q))) #v_i: scalar
-			for n,P_w in enumerate(Pw_list):
+			for P_w in Pw_list:
 				#v_i = model.w_we(tanh(model.w_qw(q) + model.w_pw(P))) #v_i: scalar
+				v_i_plus = model.w_we(tanh(model.w_qw(q))) #v_i: scalar
 				exp_v_i = exp(v_i_plus + P_w)
-				#list_e.append(exp_v_i)
-				#sum_e += exp_v_i
-				if n == 0:
-					list_e_Mat = exp_v_i
-				else:
-					list_e_Mat = Variable_hstack(list_e_Mat, exp_v_i)
+				list_e.append(exp_v_i)
+				sum_e += exp_v_i
 			# make attention vector
-			#for n, e in enumerate(list_e):
-				#if n == 0:
-					#e_all = (e / sum_e)
-				#else:
-					#e_all = Variable_hstack(e_all, e / sum_e)
-			e_all = (list_e_Mat/list_e_Mat.data.sum())
+			for n, e in enumerate(list_e):
+				if n == 0:
+					e_all = (e / sum_e)
+				else:
+					e_all = Variable_hstack(e_all, e / sum_e)
 			#print e_all.data.shape, P_all.data.shape
 			m_t = matmul(e_all,P_all)
 			#m_t = Variable(xp.zeros((1, HIDDEN_SIZE2),dtype=np.float32))
 			#for n in range(len(P_list)):
 				#a_i = list_e[n] / sum_e
 				#m_t += matmul(a_i ,P_list[n])
-			c3, q = lstm(c3, model.w_iq(model.w_xi(t)) + model.w_qq(q) + model.w_cp(m_t))
+			c, q = lstm(c, model.w_iq(model.w_xi(t)) + model.w_qq(q) + model.w_cp(m_t))
 			j = tanh(model.w_qj(q))
 			y = model.w_jy(j)
 			t = Variable(xp.array([word], dtype=np.int32))
@@ -397,33 +624,27 @@ def forward2(src_sentence, trg_sentence, model, training):
 		hyp_sentence = []
 		while len(hyp_sentence) < 100: # 100単語以上は生成しないようにする
 			#attention
-			#list_e = []
-			#sum_e = chainer.Variable(xp.zeros((1,1), dtype=np.float32))
+			list_e = []
+			sum_e = chainer.Variable(xp.zeros((1,1), dtype=np.float32))
 			#for P in P_list:
-			v_i_plus = model.w_we(tanh(model.w_qw(q))) #v_i: scalar
-			for n,P_w in enumerate(Pw_list):
+			for P_w in Pw_list:
 				#v_i = model.w_we(tanh(model.w_qw(q) + model.w_pw(P))) #v_i: scalar
-				#v_i_plus = model.w_we(tanh(model.w_qw(q))) #v_i: scalar
+				v_i_plus = model.w_we(tanh(model.w_qw(q))) #v_i: scalar
 				exp_v_i = exp(v_i_plus + P_w)
-				#list_e.append(exp_v_i)
-				#sum_e += exp_v_i
-				if n == 0:
-					list_e_Mat = exp_v_i
-				else:
-					list_e_Mat = Variable_hstack(list_e_Mat, exp_v_i)
+				list_e.append(exp_v_i)
+				sum_e += exp_v_i
 			# make attention vector
-			#for n, e in enumerate(list_e):
-				#if n == 0:
-					#e_all = (e / sum_e)
-				#else:
-					#e_all = Variable_hstack(e_all, e / sum_e)
-			e_all = (list_e_Mat/list_e_Mat.data.sum())
+			for n, e in enumerate(list_e):
+				if n == 0:
+					e_all = (e / sum_e)
+				else:
+					e_all = Variable_hstack(e_all, e / sum_e)
 			#m_t = Variable(xp.zeros((1, HIDDEN_SIZE2),dtype=np.float32))
 			#for n in range(len(P_list)):
 				#a_i = list_e[n] / sum_e
 				#m_t += matmul(a_i ,P_list[n])
 			m_t = matmul(e_all,P_all)
-			c3, q = lstm(c3, model.w_iq(model.w_xi(t)) + model.w_qq(q) + model.w_cp(m_t))
+			c, q = lstm(c, model.w_iq(model.w_xi(t)) + model.w_qq(q) + model.w_cp(m_t))
 			j = tanh(model.w_qj(q))
 			y = model.w_jy(j)
 			word = int(y.data.argmax(1)[0])
@@ -436,83 +657,6 @@ def forward2(src_sentence, trg_sentence, model, training):
 			#print word
 		return hyp_sentence
 
-def forward3(src_sentence, trg_sentence, model, training):
-	# 単語IDへの変換（自分で適当に実装する）
-	# 正解の翻訳には終端記号を追加しておく。
-	src_sentence2 = []
-	for word in src_sentence:
-		src_sentence2.append(vocabIDdic[word])
-	#src_sentence = [ japaneseIDdic[word.decode("utf-8")] for word in src_sentence]
-	#trg_sentence = [ englishIDdic[word] for word in trg_sentence] + [END_OF_SENTENCE]
-	src_sentence = src_sentence2
-	trg_sentence2 = []
-	for word in trg_sentence:
-		trg_sentence2.append(vocabIDdic[word])
-	#trg_sentence2 = (trg_sentence2 + [END_OF_SENTENCE])
-	trg_sentence2 = (trg_sentence2 + [END_OF_SENTENCES])
-	trg_sentence = trg_sentence2
-	#print trg_sentence
-	# LSTM内部状態の初期値
-	c = chainer.Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
-	c2 = chainer.Variable(xp.zeros((1, HIDDEN_SIZE2),dtype=np.float32))
-	c3 = chainer.Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
-	# エンコーダ
-	x = Variable(xp.array([END_OF_SENTENCES], dtype=np.int32))
-	i = tanh(model.w_xi(x))
-	c, p = lstm(c, model.w_ip(i))
-	c2, P = lstm(c2, model.w_iP(i))
-	P_all = P
-	Pw_list_Mat = model.w_we(tanh(model.w_pw(P)))
-	for word in reversed(src_sentence):
-		x = Variable(xp.array([word], dtype=np.int32))
-		i = tanh(model.w_xi(x))
-		c, p = lstm(c, model.w_ip(i) + model.w_pp(p))
-		c2, P = lstm(c2, model.w_iP(i) + model.w_PP(P))
-		P_all = Variable_vstack(P_all,P)
-		Pw_list_Mat = Variable_hstack(Pw_list_Mat, model.w_we(model.w_pw(P)))
-	# エンコーダ -> デコーダ
-	c, q = lstm(c, model.w_pq(p))
-	t = Variable(xp.array([END_OF_SENTENCE], dtype=np.int32))
-	# デコーダ
-	if training:
-		# 学習時はyとして正解の翻訳を使い、forwardの結果として累積損失を返す。
-		accum_loss = Variable(xp.zeros((), dtype=np.float32))
-		for word in trg_sentence:
-			#attention
-			v_i_plus = model.w_we(tanh(model.w_qw(q))) #v_i: scalar
-			v_i_plus_Mat = matmul(v_i_plus, Variable(xp.ones((1,len(src_sentence) + 1),dtype=np.float32)))
-			list_e_Mat = exp(Pw_list_Mat + v_i_plus_Mat)
-			e_all = (list_e_Mat/list_e_Mat.data.sum())
-			m_t = matmul(e_all,P_all)
-			c3, q = lstm(c3, model.w_iq(model.w_xi(t)) + model.w_qq(q) + model.w_cp(m_t))
-			j = tanh(model.w_qj(q))
-			y = model.w_jy(j)
-			t = Variable(xp.array([word], dtype=np.int32))
-			loss = softmax_cross_entropy(y, t)
-			accum_loss += softmax_cross_entropy(y, t)
-		return accum_loss
-	else:
-	# 予測時には翻訳器が生成したyを次回の入力に使い、forwardの結果として生成された単語列を返す。
-	# yの中で最大の確率を持つ単語を選択していくが、softmaxを取る必要はない。
-		hyp_sentence = []
-		while len(hyp_sentence) < 100: # 100単語以上は生成しないようにする
-			#attention
-			v_i_plus = model.w_we(tanh(model.w_qw(q))) #v_i: scalar
-			v_i_plus_Mat = matmul(v_i_plus, Variable(xp.ones((1,len(src_sentence) + 1),dtype=np.float32)))
-			list_e_Mat = exp(Pw_list_Mat + v_i_plus_Mat)
-			e_all = (list_e_Mat/list_e_Mat.data.sum())
-			m_t = matmul(e_all,P_all)
-			c3, q = lstm(c3, model.w_iq(model.w_xi(t)) + model.w_qq(q) + model.w_cp(m_t))
-			j = tanh(model.w_qj(q))
-			y = model.w_jy(j)
-			word = int(y.data.argmax(1)[0])
-			t = Variable(xp.array([word], dtype=np.int32))
-			if word == END_OF_SENTENCES:
-				hyp_sentence.append("unk" + str(END_OF_SENTENCES))
-				break # 終端記号が生成されたので終了
-			hyp_sentence.append(vocabworddic[int(word)])
-			#print word
-		return hyp_sentence
 
 opt = Adam()
 opt.setup(model)
@@ -527,7 +671,6 @@ for textID in range(0,1000):
 
 forward(sentenceslist[0], sentenceslist[0], model, training = True, state = state)
 forward2(sentenceslist[0], sentenceslist[0], model, training = True)
-forward3(sentenceslist[0], sentenceslist[0], model, training = True)
 
 import time
 def train(japansentencsetdoc,englishsentencsetdoc,model,N):
@@ -535,33 +678,20 @@ def train(japansentencsetdoc,englishsentencsetdoc,model,N):
 	opt = Adam()
 	opt.setup(model) # 学習器の初期化
 	#for sentence in sentence_set:
-	accum_loss_sum = 0
+	accum_loss_sum = Variable(xp.zeros((), dtype=np.float32))
 	first_time = time.time()
 	for textID in range(N):
 		if textID % 20 == 1:
 			print "textID: ", textID, "time", (time.time() - first_time)
-			#print accum_loss_sum.data, accum_loss.data
+			print accum_loss_sum.data, accum_loss.data
 		opt.zero_grads() # 勾配の初期化
-		#accum_loss,state = forward(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True,state = state) # 損失の計算
-		#accum_loss = forward2(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True) # 損失の計算
-		accum_loss = forward3(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True) # 損失の計算
+		accum_loss,state = forward(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True,state = state) # 損失の計算
 		print textID
 		accum_loss.backward() # 誤差逆伝播
-		accum_loss.unchain_backward() # 誤差逆伝播
-		accum_loss_sum += accum_loss.data
-		#accum_loss_sum += accum_loss
+		accum_loss_sum += accum_loss
 		#opt.clip_grads(10) # 大きすぎる勾配を抑制
 		opt.update() # パラメータの更新
-	print accum_loss_sum
-
-def evaluate(japansentencsetdoc,englishsentencsetdoc,model,N):
-	accum_loss_sum = 0
-	first_time = time.time()
-	for textID in range(1067,N):
-		#accum_loss = forward2(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True) # 損失の計算
-		accum_loss = forward3(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True) # 損失の計算
-		accum_loss_sum += accum_loss.data
-	print accum_loss_sum
+	print accum_loss_sum.data
 
 def Test(n):
 	text = ""
@@ -585,12 +715,10 @@ def test(sentence):
 	print hyp_sentence
 
 
-for i in range(0,20):
+for i in range(0,200):
 	print i
 	train(sentenceslist,sentenceslist,model,1067)
-	evaluate(sentenceslist,sentenceslist,model,1300)
-	#hyp_sentence = forward2(sentenceslist[0],sentenceslist[0],model, training = False)
-	hyp_sentence = forward3(sentenceslist[0],sentenceslist[0],model, training = False)
+	hyp_sentence = forward(sentenceslist[0],sentenceslist[0],model, training = False)
 	text = ""
 	for w in sentenceslist[0]:
 		text = text + w

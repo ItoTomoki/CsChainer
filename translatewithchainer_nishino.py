@@ -189,14 +189,14 @@ def train(japansentencsetdoc,englishsentencsetdoc,model,N):
 	opt = Adam()
 	opt.setup(model) # 学習器の初期化
 	#for sentence in sentence_set:
-	accum_loss_sum = Variable(xp.zeros((), dtype=np.float32))
+	#accum_loss_sum = Variable(xp.zeros((), dtype=np.float32))
 	for textID in range(N):
 		#if textID % 500 == 0:
 			#print "textID", textID
 		opt.zero_grads(); # 勾配の初期化
 		accum_loss = forward(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True) # 損失の計算
 		accum_loss.backward() # 誤差逆伝播
-		accum_loss_sum += accum_loss
+		#accum_loss_sum += accum_loss
 		#opt.clip_grads(10) # 大きすぎる勾配を抑制
 		opt.update() # パラメータの更新
 	print accum_loss_sum.data
@@ -246,7 +246,9 @@ for i in range(20):
 
 # Save final model
 import pickle
+pickle.dump(model.to_cpu(), open("lyric/s2s_model.dump", 'wb'), -1)
 model.to_cpu()
+pickle.dump(model, open("yahoofinance/alltext0525_s2s_model.dump", 'wb'), -1)
 pickle.dump(model, open("yahoofinance/alltext0525_s2s_model.dump", 'wb'), -1)
 pickle.dump(japaneseIDdic,open("japaneseIDdic.dump", 'wb'), -1)
 pickle.dump(englishIDdic,open("englishIDdic.dump", 'wb'), -1)
