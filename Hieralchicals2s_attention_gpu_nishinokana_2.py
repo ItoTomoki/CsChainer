@@ -130,7 +130,8 @@ END_OF_SENTENCES = (len(vocablist) + 1)
 # src_sentence: 翻訳したい単語列 e.g. ['彼', 'は', '走る']
 # trg_sentence: 正解の翻訳を表す単語列 e.g. ['he', 'runs']
 # training: 学習か予測か。デコーダの挙動に影響する。
-def forward(src_sentences, trg_sentences, model, training,state):
+#def forward(src_sentences, trg_sentences, model, training,state):
+def forward(src_sentences, trg_sentences, model, training):
 	# 単語IDへの変換（自分で適当に実装する）
 	# 正解の翻訳には終端記号を追加しておく。
 	src_sentenceList = []
@@ -167,33 +168,35 @@ def forward(src_sentences, trg_sentences, model, training,state):
 		trg_sentenceList.append(trg_sentence)
 		# LSTM内部状態の初期値
 	#X_list = []
-	C1 = state["C1"]
-	c1 = state["c1"]
-	C2 = state["C2"]
-	c2 = state["c2"]
-	C3 = state["C3"]
+	#C1 = state["C1"]
+	#c1 = state["c1"]
+	#C2 = state["C2"]
+	#c2 = state["c2"]
+	#C3 = state["C3"]
+	C = chainer.Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
+	c = chainer.Variable(xp.zeros((1, HIDDEN_SIZE),dtype=np.float32))
 	P_list = []
 	for sentebce_index,src_sentence in enumerate(reversed(src_sentenceList)):
 		# エンコーダ
 		x = Variable(xp.array([END_OF_SENTENCE], dtype=np.int32))
 		i = tanh(model.w_xi(x))
-		c1, p = lstm(c1, model.w_ip(i))
+		c, p = lstm(c, model.w_ip(i))
 		for word in reversed(src_sentence):
 			x = Variable(xp.array([word], dtype=np.int32))
 			i = tanh(model.w_xi(x))
-			c1, p = lstm(c1, model.w_ip(i) + model.w_pp(p))
+			c, p = lstm(c, model.w_ip(i) + model.w_pp(p))
 		# エンコーダ埋め込み -> 文エンコーダ埋め込み
 		#X = model.w_pI(p)
 		#X_list.append(X)
 		#X_list.append(p)
 		#文エンコーダ
 		if sentebce_index == 0:
-			C1, P = lstm(C1, model.w_IP(p))
+			C, P = lstm(C, model.w_IP(p))
 		else:
-			C1, P = lstm(C1, model.w_IP(p) + model.w_PP(P))
+			C, P = lstm(C, model.w_IP(p) + model.w_PP(P))
 		P_list.append(P)
 	#文エンコーダ -> 文デコーダ
-	C2, Q = lstm(C2, model.w_PQ(P)) #Q: 文ベクトル
+	C, Q = lstm(C, model.w_PQ(P)) #Q: 文ベクトル
 	q = Q
 	#print q.data == Q.data
 	#文デコーダ
@@ -213,7 +216,7 @@ def forward(src_sentences, trg_sentences, model, training,state):
 				#print loss.data
 				accum_loss += loss
 				#c, q = lstm(c, model.w_yq(t) + model.w_qq(q))
-				c2, q = lstm(c2, model.w_iq(model.w_xi(t)) + model.w_qq(q))
+				c, q = lstm(c, model.w_iq(model.w_xi(t)) + model.w_qq(q))
 				hyp_sentence.append(word2)
 			hyp_sentences.append(hyp_sentence)
 			hyp_sentence = []
@@ -233,9 +236,9 @@ def forward(src_sentences, trg_sentences, model, training,state):
 			# generate next word
 			#print q.data == Q.data
 			#C, Q = lstm(C, model.w_qQ(q) + model.w_QQ(Q))
-			C3, Q = lstm(C3, model.w_qQ(q) + model.w_QQ(Q) + model.w_cp(m_t))
-		state = {"c1":c1,"c2":c2,"C1":C1,"C2":C2,"C3":C3}
-		return accum_loss, hyp_sentences, trg_sentenceList,state
+			C, Q = lstm(C, model.w_qQ(q) + model.w_QQ(Q) + model.w_cp(m_t))
+		#state = {"c1":c1,"c2":c2,"C1":C1,"C2":C2,"C3":C3}
+		return accum_loss, hyp_sentences, trg_sentenceList#,state
 		# エンコーダ -> デコーダ
 		#c, q = lstm(c, model.w_pq(p))
 		# デコーダ
@@ -253,7 +256,7 @@ def forward(src_sentences, trg_sentences, model, training,state):
 			hyp_sentence.append(word)
 			t = Variable(xp.array([word], dtype=np.int32))
 			#c, q = lstm(c, model.w_yq(t) + model.w_qq(q))
-			c2, q = lstm(c2, model.w_iq(model.w_xi(t)) + model.w_qq(q))
+			c, q = lstm(c, model.w_iq(model.w_xi(t)) + model.w_qq(q))
 			#print word
 			if word == END_OF_SENTENCES:
 				hyp_sentences.append(hyp_sentence)
@@ -273,15 +276,16 @@ def forward(src_sentences, trg_sentences, model, training,state):
 					m_t += matmul(a_i ,P_list[n])
 				hyp_sentences.append(hyp_sentence)
 				#C, Q = lstm(C, model.w_qQ(q) + model.w_QQ(Q))
-				C3, Q = lstm(C3, model.w_qQ(q) + model.w_QQ(Q) + model.w_cp(m_t))
+				C, Q = lstm(C, model.w_qQ(q) + model.w_QQ(Q) + model.w_cp(m_t))
 				#print len(hyp_sentence)
 				hyp_sentence = []
 		return hyp_sentences
 
-forward(sentenceslist_file[1][2], sentenceslist_file[1][2], model, training = True,state = state)
+forward(sentenceslist_file[1][2], sentenceslist_file[1][2], model, training = True)#,state = state)
 N = 1000
 
-def train(japansentencsetdocList,englishsentencsetdocList,model,state,N = N):
+#def train(japansentencsetdocList,englishsentencsetdocList,model,state,N = N):
+def train(japansentencsetdocList,englishsentencsetdocList,model,N = N):
 	#perm = np.random.permutation(N)
 	#opt = SGD() # 確率的勾配法を使用
 	opt = Adam()
@@ -297,15 +301,15 @@ def train(japansentencsetdocList,englishsentencsetdocList,model,state,N = N):
 		for i, textID in enumerate(np.array(range(0,len(japansentencsetdoc)))):
 			opt.zero_grads() # 勾配の初期化
 			#print textID
-			accum_loss,_,_,state = forward(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True,state = state) # 損失の計算
+			accum_loss,_,_, = forward(japansentencsetdoc[textID], englishsentencsetdoc[textID], model, training = True)#,state = state) # 損失の計算
 			accum_loss_sum += accum_loss
 			accum_loss.backward() # 誤差逆伝播
 			#opt.clip_grads(10) # 大きすぎる勾配を抑制
 			opt.update() # パラメータの更新
 	print accum_loss_sum.data
-	return accum_loss_sum.data, state
+	return accum_loss_sum.data#, state
 
-train(sentenceslist_file, sentenceslist_file,model,state, N = 2)
+train(sentenceslist_file, sentenceslist_file,model,N = 2)
 
 """
 def train(japansentencsetdoc,englishsentencsetdoc,model,N = N,batchsize = 10):
@@ -338,10 +342,10 @@ def train(japansentencsetdoc,englishsentencsetdoc,model,N = N,batchsize = 10):
 	print trgs
 """
 
-def Test(japantest,englishtest,n,state):
+def Test(japantest,englishtest,n):#,state):
 	text = ""
 	hyp_sentencelist = []
-	hyp_sentences = forward(japantest[n],englishtest[n],model, training = False,state = state)
+	hyp_sentences = forward(japantest[n],englishtest[n],model, training = False)#,state = state)
 	for sentence in japantest[n]:
 		for w in sentence:
 			text = text + w
@@ -361,7 +365,7 @@ def Test(japantest,englishtest,n,state):
 		print ' '.join(hyp_sentencelist)
 		hyp_sentencelist = []
 
-hyp_sentence = forward(sentenceslist_file[1][2],sentenceslist_file[1][2],model, training = True,state = state)
+hyp_sentence = forward(sentenceslist_file[1][2],sentenceslist_file[1][2],model, training = True)#,state = state)
 Test(sentenceslist_file[1], sentenceslist_file[1],0, state = state)
 #vocabworddic
 
@@ -369,9 +373,9 @@ Test(sentenceslist_file[1], sentenceslist_file[1],0, state = state)
 
 for i in range(0,100):
 	print i
-	accum_loss, state = train(sentenceslist_file, sentenceslist_file,model,N = 100,state = state)
+	accum_loss, state = train(sentenceslist_file, sentenceslist_file,model,N = 100)#,state = state)
 	#hyp_sentence = forward(smallyahooboardsentences[0],smallyahooboardsentences[0],model, training = False)
-	hyp_sentence = forward(sentenceslist_file[1][0],sentenceslist_file[1][0],model, training = True, state = state)
+	hyp_sentence = forward(sentenceslist_file[1][0],sentenceslist_file[1][0],model, training = True)#, state = state)
 	print hyp_sentence[0].data
 	print hyp_sentence[1]
 	print hyp_sentence[2]
